@@ -123,3 +123,32 @@ frontend/node_modules/.cache/default-development/35.pack
 credentials.json
 *.key
 .credentials
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Node / React
+node_modules/
+build/
+dist/
+.cache/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Logs and backups
+*.log
+*.bak
+*.pybak
+
+# Local databases and temporary files
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.tmp

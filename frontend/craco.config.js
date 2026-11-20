@@ -1,4 +1,4 @@
-// craco.config.js
+﻿// craco.config.js
 const path = require("path");
 require("dotenv").config();
 
@@ -88,22 +88,13 @@ if (isDevServer && process.env.DISABLE_EMERGENT_OVERLAY !== "true") {
   } catch (err) {
     emergentOverlay = undefined;
     console.warn(
-      "[emergent-overlay] not loaded — overlay disabled:",
+      "[emergent-overlay] not loaded â€” overlay disabled:",
       err instanceof Error ? err.message : err,
     );
   }
 }
 
 let webpackConfig = {
-  eslint: {
-    configure: {
-      extends: ["plugin:react-hooks/recommended"],
-      rules: {
-        "react-hooks/rules-of-hooks": "error",
-        "react-hooks/exhaustive-deps": "warn",
-      },
-    },
-  },
   webpack: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
@@ -166,7 +157,7 @@ if (isDevServer) {
   } catch (err) {
     if (err.code === 'MODULE_NOT_FOUND' && err.message.includes('@emergentbase/visual-edits/craco')) {
       console.warn(
-        "[visual-edits] @emergentbase/visual-edits not installed — visual editing disabled."
+        "[visual-edits] @emergentbase/visual-edits not installed â€” visual editing disabled."
       );
     } else {
       throw err;
@@ -185,7 +176,7 @@ if (emergentOverlay) {
   const overlayFailed = (site, err) => {
     overlay = undefined;
     console.warn(
-      `[emergent-overlay] ${site} failed — overlay disabled:`,
+      `[emergent-overlay] ${site} failed â€” overlay disabled:`,
       err instanceof Error ? err.message : err,
     );
   };
@@ -227,3 +218,4 @@ webpackConfig.devServer = (devServerConfig) =>
   makeDevServerV5Compatible(configureDevServer(devServerConfig));
 
 module.exports = webpackConfig;
+

@@ -178,40 +178,60 @@ async def gs_sync(sheet: str, record: dict, photo: Optional[str] = None, photo_n
     threading.Thread(target=_gs_post, args=(url, {"sheet": sheet, "record": rec, "photo": photo, "photo_name": photo_name}), daemon=True).start()
 
 
-# ---------- Emergent Object Storage (file & media) ----------
-STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
-STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
-APP_NAME = "sifouram"
-storage_key = None
+# ---------- Supabase Storage (file & media) ----------
+from supabase import create_client, Client
+
+supabase: Optional[Client] = None
 
 
-def init_storage(force: bool = False):
-    global storage_key
-    if storage_key and not force:
-        return storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": os.environ.get("EMERGENT_LLM_KEY")}, timeout=30)
-    resp.raise_for_status()
-    storage_key = resp.json()["storage_key"]
-    return storage_key
+def init_supabase():
+    global supabase
+    if supabase:
+        return supabase
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_KEY")
+    if not url or not key:
+        logger.warning("Supabase credentials not configured. File uploads will fail.")
+        return None
+    supabase = create_client(url, key)
+    return supabase
 
 
 def put_object(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    resp = requests.put(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=120)
-    if resp.status_code == 404:
-        key = init_storage(force=True)
-        resp = requests.put(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=120)
-    resp.raise_for_status()
-    return resp.json()
+    sb = init_supabase()
+    if not sb:
+        raise HTTPException(503, "Storage service belum dikonfigurasi")
+    bucket = os.environ.get("SUPABASE_STORAGE_BUCKET", "sifouram-files")
+    try:
+        sb.storage.from_(bucket).upload(
+            path=path,
+            file=data,
+            file_options={"content-type": content_type, "upsert": "true"},
+        )
+        return {"path": path, "size": len(data)}
+    except Exception as e:
+        logger.error(f"Supabase upload failed: {e}")
+        raise HTTPException(500, f"Gagal upload file: {str(e)}")
 
 
 def get_object(path: str):
-    key = init_storage()
-    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
-    if resp.status_code == 404:
+    sb = init_supabase()
+    if not sb:
+        raise HTTPException(503, "Storage service belum dikonfigurasi")
+    bucket = os.environ.get("SUPABASE_STORAGE_BUCKET", "sifouram-files")
+    try:
+        data = sb.storage.from_(bucket).download(path)
+    except Exception as e:
+        logger.error(f"Supabase download failed for {path}: {e}")
         raise HTTPException(404, "File not found")
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+    ext = path.split(".")[-1].lower()
+    content_type = {
+        "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+        "webp": "image/webp", "pdf": "application/pdf",
+    }.get(ext, "application/octet-stream")
+    return data, content_type
+
+APP_NAME = "sifouram"
 
 
 async def store_photo(data_url: Optional[str], folder: str, user_id: str) -> Optional[str]:
@@ -746,6 +766,7 @@ async def seed():
             "whatsapp": su["whatsapp"],
             "role": su["role"],
             "active": True,
+            "pending_approval": False,
         }
         if not ex:
             doc.update({"id": uid(), "username": su["username"], "password_hash": hash_pw(su["password"]), "pin_hash": hash_pw(su["pin"]),
@@ -753,16 +774,8 @@ async def seed():
                         "settings": {"theme": "dark", "language": "en", "notifications": True, "gps_mode": "while_using"}})
             await db.users.insert_one(doc)
         else:
-            upd = {}
-            if not check_pw(su["password"], ex["password_hash"]):
-                upd["password_hash"] = hash_pw(su["password"])
-            if not check_pw(su["pin"], ex.get("pin_hash", "")):
-                upd["pin_hash"] = hash_pw(su["pin"])
-            for key, value in doc.items():
-                if ex.get(key) != value:
-                    upd[key] = value
-            if upd:
-                await db.users.update_one({"username": su["username"]}, {"$set": upd})
+            # Jangan ubah akun yang sudah ada saat backend dimulai ulang.
+            pass
     if await db.materials.count_documents({}) == 0:
         mats = []
         for name, unit, pq, pp, lbl, cat in SEED_MATERIALS:
@@ -795,10 +808,10 @@ async def on_startup():
     if saved_ranks and isinstance(saved_ranks.get("value"), list):
         RIDER_RANKS = [tuple(rank) for rank in saved_ranks["value"]]
     try:
-        init_storage()
-        logger.info("Object storage initialized")
+        init_supabase()
+        logger.info("Supabase storage initialized")
     except Exception as e:
-        logger.error(f"Storage init failed: {e}")
+        logger.warning(f"Supabase init skipped: {e}")
 
 
 @api.get("/files/{path:path}")
@@ -843,9 +856,19 @@ async def identify_account(body: IdentifyIn, request: Request):
     if phone:
         clauses.append({"whatsapp": phone})
     u = await db.users.find_one({"$or": clauses})
-    if not u or u.get("active", True) is False:
+    
+    if not u:
         await audit_event("auth.identify", request, outcome="denied", detail="unknown account")
-        raise HTTPException(401, "Akun atau status akun tidak valid.")
+        raise HTTPException(401, "Akun tidak ditemukan.")
+    
+    # ✅ BLOCK PENDING USERS
+    if u.get("pending_approval"):
+        raise HTTPException(403, "Akun Anda masih menunggu persetujuan Owner/Admin. Harap tunggu konfirmasi.")
+    
+    if u.get("active", True) is False:
+        await audit_event("auth.identify", request, outcome="denied", detail="inactive account")
+        raise HTTPException(401, "Akun tidak aktif. Hubungi Owner/Admin.")
+    
     consent = {
         "terms_version": TERMS_VERSION,
         "privacy_version": PRIVACY_VERSION,
@@ -913,26 +936,185 @@ async def login(body: LoginIn, request: Request, response: Response):
     return {"user": public_user(u)}
 
 
+# ========== REGISTRATION ENDPOINT (PUBLIC - NO LOGIN REQUIRED) ==========
+@api.post("/auth/register")
+async def register_user(body: dict, request: Request):
+    """Register user baru (pending approval dari Owner/Admin)"""
+    enforce_rate_limit(request, "auth-register", 5, 300)
+    
+    name = str(body.get("name", "")).strip()
+    phone = str(body.get("phone", "")).strip()
+    email = str(body.get("email", "")).strip().lower() if body.get("email") else None
+    role = str(body.get("role", "")).strip().lower()
+    password = str(body.get("password", ""))
+    pin = str(body.get("pin", ""))
+
+    if not re.fullmatch(r"[0-9]{6}", pin):
+        raise HTTPException(400, "PIN harus terdiri dari 6 angka")
+
+    if not name or not phone or not password:
+        raise HTTPException(400, "Nama, nomor HP, dan password wajib diisi")
+    
+    if role not in ["rider", "barteam", "admin"]:
+        raise HTTPException(400, "Role tidak valid. Pilih: rider, barteam, atau admin")
+    
+    if len(password) < 6:
+        raise HTTPException(400, "Password minimal 6 karakter")
+    
+    # Check duplicate phone
+    existing = await db.users.find_one({"whatsapp": phone})
+    if existing:
+        raise HTTPException(409, "Nomor HP sudah terdaftar")
+    
+    # Generate username dari phone
+    username = phone.replace("+", "").replace(" ", "").replace("-", "")
+    
+    # Generate unique user_id
+    user_id = username
+    counter = 1
+    while await db.users.find_one({"id": user_id}):
+        user_id = f"{username}{counter}"
+        counter += 1
+    
+    new_user = {
+        "id": user_id,
+        "username": user_id,
+        "name": name,
+        "whatsapp": phone,
+        "email": email,
+        "role": role,
+        "password_hash": hash_pw(password),
+        "pin_hash": hash_pw(pin),
+        "active": False,  # Menunggu approval (inactive sampai disetujui)
+        "pending_approval": True,  # Flag pending
+        "photo": None,
+        "banks": [],
+        "settings": {
+            "theme": "dark",
+            "language": "id",
+            "notifications": True
+        },
+        "created_at": now_iso(),
+    }
+    
+    await db.users.insert_one(new_user)
+    
+    # Kirim notifikasi ke Owner & Admin
+    await db.notifications.insert_one({
+        "id": uid(),
+        "for_role": "owner",
+        "type": "registration",
+        "title": "Pendaftaran Baru",
+        "body": f"{name} ({phone}) mendaftar sebagai {role}. Menunggu persetujuan.",
+        "ref_id": user_id,
+        "read": False,
+        "created_at": now_iso(),
+    })
+    
+    await db.notifications.insert_one({
+        "id": uid(),
+        "for_role": "admin",
+        "type": "registration",
+        "title": "Pendaftaran Baru",
+        "body": f"{name} ({phone}) mendaftar sebagai {role}. Menunggu persetujuan.",
+        "ref_id": user_id,
+        "read": False,
+        "created_at": now_iso(),
+    })
+    
+    await audit_event("auth.register", request, outcome="pending", detail=f"role={role}")
+    
+    return {
+        "message": "Pendaftaran berhasil. Menunggu persetujuan Owner/Admin.",
+        "user_id": user_id
+    }
+
+
+# ========== GET PENDING USERS (OWNER/ADMIN ONLY) ==========
+@api.get("/users/pending")
+async def get_pending_users(u=Depends(REPORTS)):
+    """List semua user yang pending approval"""
+    users = await db.users.find(
+        {"pending_approval": True},
+        {"_id": 0, "password_hash": 0, "pin_hash": 0}
+    ).sort("created_at", -1).to_list(200)
+    
+    return users
+
+
+# ========== APPROVE USER ==========
+@api.post("/users/{user_id}/approve")
+async def approve_user(user_id: str, request: Request, u=Depends(REPORTS)):
+    """Approve pending user (aktifkan akun)"""
+    user = await db.users.find_one({"id": user_id, "pending_approval": True})
+    if not user:
+        raise HTTPException(404, "User pending tidak ditemukan")
+    
+    # Update status jadi active
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {
+            "active": True,
+            "pending_approval": False,
+            "approved_by": u["name"],
+            "approved_at": now_iso(),
+        }}
+    )
+    
+    # Kirim notifikasi ke user yang disetujui
+    await db.notifications.insert_one({
+        "id": uid(),
+        "for_user": user_id,
+        "type": "registration",
+        "title": "Akun Disetujui",
+        "body": f"Selamat! Akun Anda telah disetujui oleh {u['name']}. Silakan login dengan PIN yang Anda buat saat mendaftar.",
+        "ref_id": user_id,
+        "read": False,
+        "created_at": now_iso(),
+    })
+    
+    await audit_event("users.approve", request, u["id"], detail=f"approved={user_id}")
+    
+    return {"message": f"User {user['name']} berhasil disetujui dan dapat login"}
+
+
+# ========== REJECT USER ==========
+@api.post("/users/{user_id}/reject")
+async def reject_user(user_id: str, request: Request, u=Depends(REPORTS)):
+    """Reject dan hapus pending user"""
+    user = await db.users.find_one({"id": user_id, "pending_approval": True})
+    if not user:
+        raise HTTPException(404, "User pending tidak ditemukan")
+    
+    # Hapus user dari database
+    await db.users.delete_one({"id": user_id})
+    
+    await audit_event("users.reject", request, u["id"], detail=f"rejected={user_id}")
+    
+    return {"message": f"Pendaftaran {user['name']} ditolak dan dihapus"}
+
+
 @api.post("/auth/google/session")
 async def google_login(body: dict, request: Request, response: Response):
     enforce_rate_limit(request, "auth-google", 10, 60)
     session_id = str(body.get("session_id") or "").strip()
     if not session_id:
         raise HTTPException(400, "Sesi Google tidak ditemukan")
+    sb = init_supabase()
+    if not sb:
+        raise HTTPException(503, "Supabase Auth belum dikonfigurasi")
     try:
-        result = await run_in_threadpool(
-            requests.get,
-            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-            headers={"X-Session-ID": session_id},
-            timeout=12,
-        )
-        if 400 <= result.status_code < 500:
+        auth_user = sb.auth.get_user(session_id)
+        if not auth_user or not auth_user.user:
             raise HTTPException(401, "Sesi Google tidak valid atau telah kedaluwarsa")
-        result.raise_for_status()
-        google = result.json()
+        google = {
+            "email": auth_user.user.email,
+            "name": (auth_user.user.user_metadata or {}).get("full_name", auth_user.user.email),
+            "email_verified": auth_user.user.email_confirmed_at is not None,
+        }
     except HTTPException:
         raise
-    except requests.RequestException as error:
+    except Exception as error:
         raise HTTPException(424, "Google Sign-In belum dapat diverifikasi") from error
     if google.get("email_verified") is False:
         raise HTTPException(401, "Email Google harus terverifikasi")
@@ -1095,6 +1277,7 @@ async def put_settings(body: SettingsIn, u=Depends(ANY)):
 async def list_users(role: Optional[str] = None, u=Depends(ANY)):
     if u["role"] == "owner":
         q = {"role": role} if role else {}
+        q["pending_approval"] = {"$ne": True}  # ✅ EXCLUDE PENDING USERS
         return await db.users.find(q, {"_id": 0, "password_hash": 0, "pin_hash": 0}).to_list(200)
     if u["role"] == "rider" and role == "owner":
         users = await db.users.find(
@@ -1104,7 +1287,7 @@ async def list_users(role: Optional[str] = None, u=Depends(ANY)):
         return users
     if u["role"] in {"admin", "barteam"} and role == "rider":
         return await db.users.find(
-            {"role": "rider", "active": True},
+            {"role": "rider", "active": True, "pending_approval": {"$ne": True}},
             {"_id": 0, "id": 1, "name": 1, "role": 1, "photo": 1, "placement": 1},
         ).to_list(200)
     raise HTTPException(403, "Daftar pengguna hanya tersedia untuk Owner")
@@ -1157,6 +1340,7 @@ async def create_user(body: UserCreateIn, u=Depends(SUPER)):
         "whatsapp": (body.whatsapp or "").strip(),
         "role": body.role,
         "active": body.active,
+        "pending_approval": False,  # ✅ LANGSUNG AKTIF KALAU DIBUAT ADMIN
         "password_hash": hash_pw(body.password or uid()),
         "pin_hash": hash_pw(body.pin),
         "photo": body.photo,
@@ -1755,14 +1939,44 @@ async def produce(body: ProduceIn, u=Depends(STAFF)):
         raise HTTPException(404, "Menu not found")
     if body.type == "produce":
         mats = {m["id"]: m for m in await db.materials.find({}, NOID).to_list(200)}
+        usage = []
         for r in mn["recipe"]:
             mt = mats.get(r["material_id"])
             if mt and mt.get("category") != "packaging":
-                used = r["qty"] * body.qty
-                await db.materials.update_one({"id": mt["id"]}, {"$inc": {"stock": -used}})
+                usage.append((mt, r["qty"] * body.qty))
+        for mt, used in usage:
+            if mt.get("stock", 0) < used:
+                raise HTTPException(
+                    400,
+                    f"Bahan {mt['name']} tidak cukup untuk produksi {body.qty} "
+                    f"(tersedia {mt.get('stock', 0)}{mt['unit']}, butuh {used}{mt['unit']})",
+                )
+        deducted: List[tuple] = []
+        try:
+            for mt, used in usage:
+                prev_m = await db.materials.find_one_and_update(
+                    {"id": mt["id"], "stock": {"$gte": used}},
+                    {"$inc": {"stock": -used}},
+                    projection=NOID,
+                    return_document=ReturnDocument.BEFORE,
+                )
+                if not prev_m:
+                    raise HTTPException(
+                        400,
+                        f"Bahan {mt['name']} baru saja dipakai proses lain. Muat ulang dan coba lagi.",
+                    )
+                deducted.append((mt["id"], used))
                 await db.inventory_tx.insert_one({"id": uid(), "material_id": mt["id"], "material_name": mt["name"], "unit": mt["unit"], "type": "out", "qty": used,
-                                                  "before": mt["stock"], "after": mt["stock"] - used, "cost": 0, "note": f"Production {mn['name']} x{body.qty}",
+                                                  "before": prev_m["stock"], "after": prev_m["stock"] - used, "cost": 0, "note": f"Production {mn['name']} x{body.qty}",
                                                   "date": body.date, "user": u["name"], "created_at": now_iso()})
+        except HTTPException:
+            for mid, used in deducted:
+                await db.materials.update_one({"id": mid}, {"$inc": {"stock": used}})
+            raise
+        except Exception:
+            for mid, used in deducted:
+                await db.materials.update_one({"id": mid}, {"$inc": {"stock": used}})
+            raise HTTPException(500, "Gagal mencatat produksi. Coba lagi.")
         new_stock = mn["stock"] + body.qty
     else:
         new_stock = body.qty
@@ -1861,17 +2075,38 @@ async def save_rider_stock(body: RiderStockIn, u=Depends(STAFF)):
     photo = await store_photo(photo, "rider_stock", rider["id"])
     prev_items = prev["items"] if prev else {}
     menus = {m["id"]: m for m in await db.menus.find({}, NOID).to_list(100)}
-    changes = []
-    for mid, qty in body.items.items():
-        if mid not in menus:
-            raise HTTPException(404, "Menu stock tidak ditemukan")
-        delta = qty - prev_items.get(mid, 0)
-        if delta > 0 and menus[mid]["stock"] < delta:
-            raise HTTPException(400, f"Stock central {menus[mid]['name']} tidak mencukupi")
-        if delta:
-            changes.append((mid, delta))
-    for mid, delta in changes:
-        await db.menus.update_one({"id": mid}, {"$inc": {"stock": -delta}})
+    deducted: List[tuple] = []
+    try:
+        for mid, qty in body.items.items():
+            if mid not in menus:
+                raise HTTPException(404, "Menu stock tidak ditemukan")
+            delta = qty - prev_items.get(mid, 0)
+            if delta > 0:
+                updated = await db.menus.find_one_and_update(
+                    {"id": mid, "stock": {"$gte": delta}},
+                    {"$inc": {"stock": -delta}},
+                    projection=NOID,
+                    return_document=ReturnDocument.BEFORE,
+                )
+                if not updated:
+                    current = await db.menus.find_one({"id": mid}, NOID)
+                    available = (current or {}).get("stock", 0)
+                    raise HTTPException(
+                        400,
+                        f"Stock central {menus[mid]['name']} tidak mencukupi "
+                        f"(tersedia {available}, butuh {delta})",
+                    )
+                deducted.append((mid, delta))
+            elif delta < 0:
+                await db.menus.update_one({"id": mid}, {"$inc": {"stock": -delta}})
+    except HTTPException:
+        for mid, delta in deducted:
+            await db.menus.update_one({"id": mid}, {"$inc": {"stock": delta}})
+        raise
+    except Exception:
+        for mid, delta in deducted:
+            await db.menus.update_one({"id": mid}, {"$inc": {"stock": delta}})
+        raise HTTPException(500, "Gagal memperbarui stok. Coba lagi.")
     total = sum(body.items.values())
     doc = {"id": prev["id"] if prev else uid(), "rider_id": rider["id"], "rider_name": rider["name"], "pic_id": u["id"], "pic_name": u["name"], "date": body.date,
            "time": now_wib(), "items": body.items, "detail": {menus[k]["name"]: v for k, v in body.items.items() if k in menus}, "total": total, "photo": photo,
@@ -2469,7 +2704,7 @@ async def extract_expense_receipt(
 ):
     enforce_rate_limit(request, "expense-extract", 8, 300)
     validate_expense_proof(body.proof)
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    from groq import AsyncGroq
 
     prompt = (
         "Baca foto struk atau bukti pembayaran Indonesia ini. Balas HANYA JSON valid tanpa markdown "
@@ -2481,20 +2716,23 @@ async def extract_expense_receipt(
         "Jika data tidak terbaca, gunakan amount 0, category Other, account cash, confidence 0, dan note singkat. "
         "Jangan pernah membuat nominal jika tidak terlihat jelas."
     )
-    async def extract_with(model: str) -> dict:
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"expense-extract-{u['id']}-{uid()}",
-            system_message="Kamu adalah asisten ekstraksi struk yang teliti.",
-        ).with_model("gemini", model)
-        result = await chat.send_message(UserMessage(text=prompt, file_contents=[body.proof]))
-        draft = receipt_draft(receipt_json(result))
-        draft["model"] = model
-        return draft
+    groq_client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY"))
     try:
-        draft = await extract_with("gemini-3.8-flash")
-        if draft["confidence"] < 0.8 or not draft["amount"]:
-            draft = await extract_with("gemini-3.1-pro-preview")
+        completion = await groq_client.chat.completions.create(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            messages=[
+                {"role": "system", "content": "Kamu adalah asisten ekstraksi struk yang teliti."},
+                {"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": body.proof}},
+                ]},
+            ],
+            temperature=0.2,
+            max_tokens=800,
+        )
+        result = completion.choices[0].message.content
+        draft = receipt_draft(receipt_json(result))
+        draft["model"] = "llama-4-scout"
     except Exception as error:
         logger.exception("Expense receipt extraction failed")
         raise HTTPException(
@@ -2763,9 +3001,16 @@ async def inventory_wastage(body: WastageIn, u=Depends(ANY)):
     if not m:
         raise HTTPException(404, "Menu not found")
     url = await store_photo(body.photo, "wastage", uid())
-    before = m.get("stock", 0)
+    prev_m = await db.menus.find_one_and_update(
+        {"id": body.menu_id, "stock": {"$gte": body.qty}},
+        {"$inc": {"stock": -body.qty}},
+        projection=NOID,
+        return_document=ReturnDocument.BEFORE,
+    )
+    if not prev_m:
+        raise HTTPException(400, f"Stok {m['name']} tidak cukup untuk wastage {body.qty}")
+    before = prev_m.get("stock", 0)
     after = before - body.qty
-    await db.menus.update_one({"id": body.menu_id}, {"$set": {"stock": after}})
     doc = {"id": uid(), "menu_id": m["id"], "menu_name": m["name"], "type": "wastage", "qty": body.qty, "before": before, "after": after,
            "photo_url": url, "note": body.note, "date": datetime.now(WIB).strftime("%Y-%m-%d"), "time": now_wib(), "user": u["name"], "created_at": now_iso()}
     await db.menu_stock_tx.insert_one(doc)
@@ -2886,7 +3131,7 @@ async def coach_history(session_id: Optional[str] = None, u=Depends(ANY)):
 
 @api.post("/coach/chat")
 async def coach_chat(body: CoachIn, u=Depends(ANY)):
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    from groq import AsyncGroq
     d = datetime.now(WIB).strftime("%Y-%m-%d")
     st = await pos_stock(u["id"], d) if u["role"] == "rider" else {"items": []}
     sold = sum(i["sold"] for i in st["items"])
@@ -2926,15 +3171,28 @@ async def coach_chat(body: CoachIn, u=Depends(ANY)):
               "Jawab padat (maks ±180 kata), pakai bullet & emoji secukupnya. Jika pertanyaan menyangkut jualan atau lokasi, WAJIB sertakan 2–3 lokasi ramai TERDEKAT dari daftar POI dengan alasan & jam terbaik, plus 1 taktik jualan konkret (sapaan, bundling 4 cup Rp45.000 / 10 cup Rp110.000, upsell). "
               "Untuk pertanyaan lain, jawab langsung & akurat, lalu bila relevan kaitkan dengan cara menambah penjualan kopi. Selalu tutup dengan 1 kalimat penyemangat. "
               f"\nKONTEKS: waktu {datetime.now(WIB).strftime('%A %H:%M')} WIB. Lokasi rider: {area or 'tidak diketahui'}. User: {u['name']} ({u['role']}). Terjual hari ini {sold} cup (target 50). Sisa stok: {remaining}.\nPOI radius 1,5 km:\n{poi_txt}\n\nRiwayat:\n{hist_txt}")
-    models = {"gpt-terra": ("openai", "gpt-5.6-terra"), "gpt": ("openai", "gpt-5.4"), "claude-sonnet": ("anthropic", "claude-sonnet-5-5"), "claude": ("anthropic", "claude-sonnet-4-6"), "gemini": ("gemini", "gemini-3.8-flash")}
-    prov, model = models.get(body.provider or "gemini", ("gemini", "gemini-3.8-flash"))
-    chat = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=f"coach-{u['id']}-{session_id}",
-        system_message=system,
-    ).with_model(prov, model)
+    models = {
+        "llama": "llama-3.3-70b-versatile",
+        "llama-70b": "llama-3.3-70b-versatile",
+        "mixtral": "mixtral-8x7b-32768",
+        "gemma": "gemma2-9b-it",
+        "gpt": "llama-3.3-70b-versatile",
+        "gemini": "llama-3.3-70b-versatile",
+        "claude": "llama-3.3-70b-versatile",
+    }
+    model = models.get(body.provider or "llama", "llama-3.3-70b-versatile")
+    groq_client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY"))
     try:
-        reply = await chat.send_message(UserMessage(text=body.message))
+        completion = await groq_client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": body.message},
+            ],
+            temperature=0.8,
+            max_tokens=600,
+        )
+        reply = completion.choices[0].message.content
     except Exception as error:
         if created_session:
             await db.coach_sessions.delete_one({"id": session_id, "user_id": u["id"]})
@@ -2959,12 +3217,25 @@ class PromoIn(BaseModel):
 
 @api.post("/promo/idea")
 async def promo_idea(body: PromoIn, u=Depends(SUPER)):
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    from groq import AsyncGroq
     system = ("Kamu copywriter promosi WhatsApp untuk 'SI FOUR AM', kopi gerobak keliling (Rp5.000–12.000/cup, ada bundling 4 cup Rp45.000 & 10 cup Rp110.000). "
               "Buat 1 pesan promo WhatsApp Bahasa Indonesia yang singkat (maks 60 kata), hangat, persuasif, pakai emoji secukupnya, sebut nama toko SI FOUR AM, ada ajakan beli & sebut bundling. "
               "Boleh pakai token {nama} sebagai sapaan nama pelanggan. Jangan pakai placeholder kurung siku lain. Balas HANYA teks pesannya saja.")
-    chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"promo-{u['id']}", system_message=system).with_model("openai", "gpt-5.4-mini")
-    text = await chat.send_message(UserMessage(text=(body.theme or "promo menarik hari ini untuk menarik pelanggan")))
+    groq_client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY"))
+    try:
+        completion = await groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": body.theme or "promo menarik hari ini untuk menarik pelanggan"},
+            ],
+            temperature=0.9,
+            max_tokens=200,
+        )
+        text = completion.choices[0].message.content
+    except Exception as error:
+        logger.exception("Promo generation failed")
+        raise HTTPException(424, "AI promo belum dapat merespons. Coba lagi.") from error
     return {"text": text}
 
 
@@ -3366,7 +3637,7 @@ async def dashboard_summary(start: str, end: str, rider_id: Optional[str] = None
 async def salary(start: str, end: str, rider_id: Optional[str] = None, u=Depends(ANY)):
     if u["role"] == "rider":
         rider_id = u["id"]
-    riders = await db.users.find({"role": "rider", "active": {"$ne": False}, **({"id": rider_id} if rider_id else {})}, {"_id": 0, "password_hash": 0, "pin_hash": 0}).to_list(50)
+    riders = await db.users.find({"role": "rider", "active": {"$ne": False}, "pending_approval": {"$ne": True}, **({"id": rider_id} if rider_id else {})}, {"_id": 0, "password_hash": 0, "pin_hash": 0}).to_list(50)
     recs = await daily_summaries(start, end, rider_id)
     att_q = {"date": {"$gte": start, "$lte": end}}
     if rider_id:
@@ -3529,7 +3800,6 @@ HOLIDAYS_ID = {"2026-01-01", "2026-01-16", "2026-02-17", "2026-03-19", "2026-03-
 
 @api.get("/forecast")
 async def forecast(rider_id: str, date: str, u=Depends(ANY)):
-    """Suggest tomorrow's initial stock per menu from sales history (same weekday + recent trend + holiday uplift)."""
     target = datetime.strptime(date, "%Y-%m-%d")
     start = (target - timedelta(days=56)).strftime("%Y-%m-%d")
     recs = await daily_summaries(start, (target - timedelta(days=1)).strftime("%Y-%m-%d"), rider_id)

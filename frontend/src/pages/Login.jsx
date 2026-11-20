@@ -71,7 +71,7 @@ function DocumentModal({ type, onClose, onAgree }) {
 }
 
 export default function Login() {
-  const { identify, login, googleLogin } = useAuth();
+  const { identify, login } = useAuth();
   const { lang, setLang } = useT();
   const [identifier, setIdentifier] = useState(() => localStorage.getItem("si4am_remembered_identifier") || "");
   const [stage, setStage] = useState("identity");
@@ -85,27 +85,6 @@ export default function Login() {
   const [showRiderGuide, setShowRiderGuide] = useState(false);
   const pinRefs = useRef([]);
   const pinSubmitting = useRef(false);
-  const googleCallbackProcessed = useRef(false);
-
-  useEffect(() => {
-    const sessionId = new URLSearchParams(window.location.hash.slice(1)).get("session_id");
-    if (!sessionId || googleCallbackProcessed.current) return;
-    googleCallbackProcessed.current = true;
-    setBusy(true);
-    googleLogin(sessionId)
-      .then((user) => toast.success("Selamat datang", { description: user.name }))
-      .catch((error) => toast.error(errMsg(error)))
-      .finally(() => {
-        window.history.replaceState(null, "", window.location.pathname);
-        setBusy(false);
-      });
-  }, [googleLogin]);
-
-  const signInWithGoogle = () => {
-    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-    const redirectUrl = window.location.origin + "/";
-    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
-  };
 
   useEffect(() => {
     const isNewRider = stage === "pin" && account?.user?.role === "rider";
@@ -248,11 +227,10 @@ export default function Login() {
             </button>
             <button
               type="button"
-              data-testid="google-sign-in-button"
-              onClick={signInWithGoogle}
+              onClick={() => window.location.href = '/register'}
               className="btn-ghost w-full"
             >
-              Masuk dengan Google
+              Belum punya akun? Daftar di sini
             </button>
           </form>
         ) : (

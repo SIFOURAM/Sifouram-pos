@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
-import { LayoutDashboard, Boxes, Layers, ShoppingCart, Bike, Wallet, FileText, HandCoins, LineChart, BadgeDollarSign, Settings as Cog, MoreHorizontal, LogOut, Sun, Moon, Gauge, Users, Bell, UserCog, ChartNoAxesCombined, MessageCircle, ChevronRight } from "lucide-react";
+import { LayoutDashboard, Boxes, Layers, ShoppingCart, Bike, Wallet, FileText, HandCoins, LineChart, BadgeDollarSign, Settings as Cog, MoreHorizontal, LogOut, Sun, Moon, Gauge, Users, Bell, UserCog, ChartNoAxesCombined, MessageCircle, ChevronRight, CheckCircle, Receipt, DollarSign, Calendar, CreditCard, Trophy, TrendingUp, MessageSquare } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useT } from "../lib/i18n";
 import { api } from "../lib/api";
@@ -52,7 +52,7 @@ function NotifBell() {
       purchase_order: "/purchase-orders",
       deposit: "/deposit",
       order: "/invoice",
-      withdrawal: "/salary",
+      withdrawal: "/withdrawals",
     };
     const fallback = user?.role === "rider" ? "/rider-dashboard" : user?.role === "barteam" ? "/menu-stock?mode=production" : "/";
     navigate(targets[notification.type] || fallback);
@@ -83,7 +83,18 @@ function NotifBell() {
   );
 }
 
-const I = { dashboard: LayoutDashboard, inventory: Boxes, menuStock: Layers, pos: ShoppingCart, riderStock: Bike, stockRider: Bike, stockPickup: HandCoins, stockRemaining: Gauge, deposit: Wallet, invoice: FileText, riderDash: Gauge, handover: HandCoins, finance: LineChart, salary: BadgeDollarSign, settings: Cog, profile: UserCog, customers: Users, userInfo: UserCog, reports: ChartNoAxesCombined, purchaseOrders: FileText, broadcast: MessageCircle, paymentAccounts: Wallet };
+const I = { 
+  dashboard: LayoutDashboard, inventory: Boxes, menuStock: Layers, pos: ShoppingCart, 
+  riderStock: Bike, stockRider: Bike, stockPickup: HandCoins, stockRemaining: Gauge, 
+  deposit: Wallet, invoice: FileText, riderDash: Gauge, handover: HandCoins, 
+  finance: LineChart, salary: BadgeDollarSign, settings: Cog, profile: UserCog, 
+  customers: Users, userInfo: UserCog, reports: ChartNoAxesCombined, 
+  purchaseOrders: FileText, broadcast: MessageCircle, paymentAccounts: CreditCard,
+  // NEW ICONS
+  eod: CheckCircle, expenses: Receipt, withdrawals: DollarSign, users: Users,
+  attendance: Calendar, riderRanks: Trophy, notifications: Bell,
+  forecast: TrendingUp, coachSessions: MessageSquare
+};
 const item = (to, key) => ({ to, key, icon: I[key] });
 
 export const NAV = {
@@ -108,30 +119,30 @@ export const HOME = { owner: "/", admin: "/", barteam: "/menu-stock", rider: "/r
 
 export const CATEGORIES = {
   owner: [
-    { name: "Dashboard", icon: LayoutDashboard, to: "/", match: (loc) => ["/", "/reports", "/finance", "/rider-dashboard", "/salary"].includes(loc.pathname), tabs: [item("/", "dashboard"), { ...item("/reports", "reports"), subtabs: [{ to: "/finance", label: "Keuangan" }, { to: "/reports?view=sales", label: "Penjualan" }, { to: "/reports?view=products", label: "Produk" }, { to: "/reports?view=wastage", label: "Wastage" }, { to: "/reports?view=inventory", label: "Persediaan" }, { to: "/reports?view=purchases", label: "Pembelian" }, { to: "/reports?view=opname", label: "Opname" }] }, item("/rider-dashboard", "riderDash"), item("/salary", "salary")] },
+    { name: "Dashboard", icon: LayoutDashboard, to: "/", match: (loc) => ["/", "/reports", "/finance", "/rider-dashboard", "/salary"].includes(loc.pathname), tabs: [item("/", "dashboard"), { ...item("/reports", "reports"), subtabs: [{ to: "/finance", label: "Keuangan" }, { to: "/reports?view=sales", label: "Penjualan" }, { to: "/reports?view=products", label: "Produk" }, { to: "/reports?view=wastage", label: "Wastage" }, { to: "/reports?view=inventory", label: "Persediaan" }, { to: "/reports?view=purchases", label: "Pembelian" }, { to: "/reports?view=opname", label: "Opname" }] }, item("/rider-dashboard", "riderDash"), item("/salary", "salary"), item("/forecast", "forecast")] },
     { name: "Stock", icon: Boxes, to: "/rider-stock", tabs: [item("/rider-stock", "riderStock"), item("/rider-stock?view=rider", "stockRider"), item("/rider-stock?view=pickup", "stockPickup"), item("/rider-stock?view=remaining", "stockRemaining"), item("/menu-stock", "menuStock")] },
-    { name: "POS", icon: ShoppingCart, to: "/pos-dashboard", tabs: [item("/pos-dashboard", "posDashboard"), item("/pos", "pos"), item("/deposit", "deposit"), item("/invoice", "invoice"), item("/customers", "customers"), item("/handover", "handover")] },
-    { name: "Production", icon: Layers, to: "/inventory", tabs: [{ ...item("/inventory", "inventory"), subtabs: [{ to: "/inventory?tab=stock", label: "Stok" }, { to: "/inventory?tab=recipes", label: "Resep" }, { to: "/inventory?tab=wastage", label: "Wastage" }, { to: "/inventory?tab=history", label: "History" }, { to: "/menu-stock?mode=production", label: "Stock Menu" }] }, item("/purchase-orders", "purchaseOrders"), { to: "/purchase", label: "Purchase", icon: FileText }] },
-    { name: "Lainnya", icon: MoreHorizontal, to: "/user-info", tabs: [item("/user-info", "userInfo"), item("/broadcast", "broadcast"), item("/payment-accounts", "paymentAccounts"), item("/settings", "settings")] },
+    { name: "POS", icon: ShoppingCart, to: "/pos-dashboard", tabs: [item("/pos-dashboard", "posDashboard"), item("/pos", "pos"), item("/eod", "eod"), item("/deposit", "deposit"), item("/invoice", "invoice"), item("/customers", "customers"), item("/handover", "handover")] },
+    { name: "Production", icon: Layers, to: "/inventory", tabs: [{ ...item("/inventory", "inventory"), subtabs: [{ to: "/inventory?tab=stock", label: "Stok" }, { to: "/inventory?tab=recipes", label: "Resep" }, { to: "/inventory?tab=wastage", label: "Wastage" }, { to: "/inventory?tab=history", label: "History" }, { to: "/menu-stock?mode=production", label: "Stock Menu" }] }, item("/purchase-orders", "purchaseOrders"), { to: "/purchase", label: "Purchase", icon: FileText }, item("/expenses", "expenses")] },
+    { name: "Lainnya", icon: MoreHorizontal, to: "/user-info", tabs: [item("/users", "users"), item("/attendance", "attendance"), item("/withdrawals", "withdrawals"), item("/payment-accounts", "paymentAccounts"), item("/rider-ranks", "riderRanks"), item("/broadcast", "broadcast"), item("/notifications", "notifications"), item("/coach-sessions", "coachSessions"), item("/user-info", "userInfo"), item("/settings", "settings")] },
   ],
   admin: [
-    { name: "Dashboard", icon: LayoutDashboard, to: "/", match: (loc) => ["/", "/reports", "/finance", "/rider-dashboard", "/salary"].includes(loc.pathname), tabs: [item("/", "dashboard"), { ...item("/reports", "reports"), subtabs: [{ to: "/finance", label: "Keuangan" }, { to: "/reports?view=sales", label: "Penjualan" }, { to: "/reports?view=products", label: "Produk" }, { to: "/reports?view=wastage", label: "Wastage" }, { to: "/reports?view=inventory", label: "Persediaan" }, { to: "/reports?view=purchases", label: "Pembelian" }, { to: "/reports?view=opname", label: "Opname" }] }, item("/rider-dashboard", "riderDash"), item("/salary", "salary")] },
+    { name: "Dashboard", icon: LayoutDashboard, to: "/", match: (loc) => ["/", "/reports", "/finance", "/rider-dashboard", "/salary"].includes(loc.pathname), tabs: [item("/", "dashboard"), { ...item("/reports", "reports"), subtabs: [{ to: "/finance", label: "Keuangan" }, { to: "/reports?view=sales", label: "Penjualan" }, { to: "/reports?view=products", label: "Produk" }, { to: "/reports?view=wastage", label: "Wastage" }, { to: "/reports?view=inventory", label: "Persediaan" }, { to: "/reports?view=purchases", label: "Pembelian" }, { to: "/reports?view=opname", label: "Opname" }] }, item("/rider-dashboard", "riderDash"), item("/salary", "salary"), item("/forecast", "forecast")] },
     { name: "Stock", icon: Boxes, to: "/rider-stock", tabs: [item("/rider-stock", "riderStock"), item("/rider-stock?view=rider", "stockRider"), item("/rider-stock?view=pickup", "stockPickup"), item("/rider-stock?view=remaining", "stockRemaining"), item("/menu-stock", "menuStock")] },
     { name: "POS", icon: ShoppingCart, to: "/pos-dashboard", tabs: [item("/pos-dashboard", "posDashboard"), item("/deposit", "deposit")] },
-    { name: "Production", icon: Layers, to: "/inventory", tabs: [{ ...item("/inventory", "inventory"), subtabs: [{ to: "/inventory?tab=stock", label: "Stok" }, { to: "/inventory?tab=recipes", label: "Resep" }, { to: "/inventory?tab=wastage", label: "Wastage" }, { to: "/inventory?tab=history", label: "History" }, { to: "/menu-stock?mode=production", label: "Stock Menu" }] }, item("/purchase-orders", "purchaseOrders"), { to: "/purchase", label: "Purchase", icon: FileText }] },
-    { name: "Lainnya", icon: MoreHorizontal, to: "/settings", tabs: [item("/settings", "settings")] },
+    { name: "Production", icon: Layers, to: "/inventory", tabs: [{ ...item("/inventory", "inventory"), subtabs: [{ to: "/inventory?tab=stock", label: "Stok" }, { to: "/inventory?tab=recipes", label: "Resep" }, { to: "/inventory?tab=wastage", label: "Wastage" }, { to: "/inventory?tab=history", label: "History" }, { to: "/menu-stock?mode=production", label: "Stock Menu" }] }, item("/purchase-orders", "purchaseOrders"), { to: "/purchase", label: "Purchase", icon: FileText }, item("/expenses", "expenses")] },
+    { name: "Lainnya", icon: MoreHorizontal, to: "/settings", tabs: [item("/users", "users"), item("/attendance", "attendance"), item("/withdrawals", "withdrawals"), item("/notifications", "notifications"), item("/coach-sessions", "coachSessions"), item("/settings", "settings")] },
   ],
   barteam: [
     { name: "Stock", icon: Boxes, to: "/rider-stock", tabs: [item("/rider-stock", "riderStock"), item("/rider-stock?view=rider", "stockRider"), item("/rider-stock?view=pickup", "stockPickup"), item("/rider-stock?view=remaining", "stockRemaining"), item("/menu-stock", "menuStock")] },
     { name: "POS", icon: ShoppingCart, to: "/pos", tabs: [item("/pos", "pos"), item("/deposit", "deposit")] },
-    { name: "Production", icon: Layers, to: "/inventory", tabs: [{ ...item("/inventory", "inventory"), subtabs: [{ to: "/inventory?tab=stock", label: "Stok" }, { to: "/inventory?tab=recipes", label: "Resep" }, { to: "/inventory?tab=wastage", label: "Wastage" }, { to: "/inventory?tab=history", label: "History" }, { to: "/menu-stock?mode=production", label: "Stock Menu" }] }, item("/purchase-orders", "purchaseOrders")] },
-    { name: "Lainnya", icon: MoreHorizontal, to: "/settings", tabs: [item("/settings", "settings")] },
+    { name: "Production", icon: Layers, to: "/inventory", tabs: [{ ...item("/inventory", "inventory"), subtabs: [{ to: "/inventory?tab=stock", label: "Stok" }, { to: "/inventory?tab=recipes", label: "Resep" }, { to: "/inventory?tab=wastage", label: "Wastage" }, { to: "/inventory?tab=history", label: "History" }, { to: "/menu-stock?mode=production", label: "Stock Menu" }] }, item("/purchase-orders", "purchaseOrders"), item("/expenses", "expenses")] },
+    { name: "Lainnya", icon: MoreHorizontal, to: "/settings", tabs: [item("/withdrawals", "withdrawals"), item("/notifications", "notifications"), item("/coach-sessions", "coachSessions"), item("/settings", "settings")] },
   ],
   rider: [
     { name: "Dashboard", icon: Gauge, to: "/rider-dashboard", tabs: [item("/rider-dashboard", "riderDash")] },
     { name: "Stock", icon: Boxes, to: "/rider-stock?view=pickup", tabs: [item("/rider-stock?view=rider", "stockRider"), item("/rider-stock?view=pickup", "stockPickup"), item("/rider-stock?view=remaining", "stockRemaining")] },
-    { name: "POS", icon: ShoppingCart, to: "/pos", tabs: [item("/pos", "pos")] },
-    { name: "Akun", icon: UserCog, to: "/profile", tabs: [item("/profile", "profile")] },
+    { name: "POS", icon: ShoppingCart, to: "/pos", tabs: [item("/pos", "pos"), item("/eod", "eod")] },
+    { name: "Akun", icon: UserCog, to: "/profile", tabs: [item("/profile", "profile"), item("/withdrawals", "withdrawals"), item("/notifications", "notifications"), item("/coach-sessions", "coachSessions")] },
     { name: "Pengaturan", icon: Cog, to: "/settings", tabs: [item("/settings", "settings")] },
   ],
 };
