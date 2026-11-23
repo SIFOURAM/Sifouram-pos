@@ -83,17 +83,46 @@ function NotifBell() {
   );
 }
 
-const I = { 
-  dashboard: LayoutDashboard, inventory: Boxes, menuStock: Layers, pos: ShoppingCart, 
-  riderStock: Bike, stockRider: Bike, stockPickup: HandCoins, stockRemaining: Gauge, 
-  deposit: Wallet, invoice: FileText, riderDash: Gauge, handover: HandCoins, 
-  finance: LineChart, salary: BadgeDollarSign, settings: Cog, profile: UserCog, 
-  customers: Users, userInfo: UserCog, reports: ChartNoAxesCombined, 
-  purchaseOrders: FileText, broadcast: MessageCircle, paymentAccounts: CreditCard,
-  // NEW ICONS
-  eod: CheckCircle, expenses: Receipt, withdrawals: DollarSign, users: Users,
-  attendance: Calendar, riderRanks: Trophy, notifications: Bell,
-  forecast: TrendingUp, coachSessions: MessageSquare
+const I = {
+  dashboard: LayoutDashboard,
+  posDashboard: LayoutDashboard,
+
+  inventory: Boxes,
+  menuStock: Layers,
+  pos: ShoppingCart,
+
+  riderStock: Bike,
+  stockRider: Bike,
+  stockPickup: HandCoins,
+  stockRemaining: Gauge,
+
+  deposit: Wallet,
+  invoice: FileText,
+  riderDash: Gauge,
+  handover: HandCoins,
+
+  finance: LineChart,
+  salary: BadgeDollarSign,
+  settings: Cog,
+  profile: UserCog,
+
+  customers: Users,
+  userInfo: UserCog,
+  users: Users,
+  reports: ChartNoAxesCombined,
+
+  purchaseOrders: FileText,
+  broadcast: MessageCircle,
+  paymentAccounts: CreditCard,
+
+  eod: CheckCircle,
+  expenses: Receipt,
+  withdrawals: DollarSign,
+  attendance: Calendar,
+  riderRanks: Trophy,
+  notifications: Bell,
+  forecast: TrendingUp,
+  coachSessions: MessageSquare,
 };
 const item = (to, key) => ({ to, key, icon: I[key] });
 
@@ -151,7 +180,17 @@ function CategoryTabs({ category, t }) {
   const location = useLocation();
   const navigate = useNavigate();
   const currentPath = `${location.pathname}${location.search}`;
-  const activeTab = category.tabs.find((tab) => tab.to === currentPath || tab.subtabs?.some((subtab) => subtab.to === currentPath)) || category.tabs.find((tab) => location.pathname === tab.to.split("?")[0]) || category.tabs[0];
+const activeTab =
+  category.tabs.find(
+    (tab) =>
+      tab.to === currentPath ||
+      tab.subtabs?.some((subtab) => subtab.to === currentPath)
+  ) ||
+  category.tabs.find(
+    (tab) => location.pathname === tab.to.split("?")[0]
+  ) ||
+  category.tabs[0];
+  category.tabs.find((tab) => location.pathname === tab.to.split("?")[0]) || category.tabs[0];
   const [visible, setVisible] = useState(true);
   const [isSelecting, setIsSelecting] = useState(false);
   const selectTab = (to) => navigate(to);
@@ -169,13 +208,17 @@ function CategoryTabs({ category, t }) {
         <span data-testid="category-current-label" className="flex h-[23px] items-center font-heading text-[11px] font-semibold leading-none text-primary">{category.name}</span>
         <select
           data-testid="category-tabs-dropdown"
-          value={activeTab.to}
+          value={activeTab?.to || category.tabs[0]?.to || ""}
           onFocus={() => setIsSelecting(true)}
           onBlur={() => setIsSelecting(false)}
           onChange={(event) => selectTab(event.target.value)}
           className={`category-dropdown h-[23px] px-2 text-[11px] text-primary font-semibold ${activeTab.subtabs?.length ? "max-w-[5.2rem]" : "max-w-[9rem]"}`}
         >
-          {category.tabs.map((tab) => <option key={tab.to} value={tab.to}>{tab.label || t(tab.key)}</option>)}
+          {category.tabs.map((tab) => (
+	    <option key={tab.to} value={tab.to}>
+	      {tab.label || t(tab.key)}
+	   </option>
+	  ))}
         </select>
         {activeTab.subtabs?.length > 0 && (
           <select
@@ -230,11 +273,23 @@ export default function Layout() {
   const { main, more } = NAV[user.role] || { main: [], more: [] };
   const roleLabel = { owner: "Owner", admin: "Admin", barteam: "Bar Team", rider: "Rider" }[user.role];
   const categories = CATEGORIES[user.role] || [];
-  const activeCategory = categories.find((category) => (
-    category.match
-      ? category.match(loc)
-      : category.tabs.some((tab) => tab.to === `${loc.pathname}${loc.search}` || tab.subtabs?.some((subtab) => subtab.to === `${loc.pathname}${loc.search}`))
-  )) || categories[0];
+const currentLocation = `${loc.pathname}${loc.search}`;
+
+const activeCategory =
+  categories.find((category) => {
+    if (category.match) {
+      return category.match(loc);
+    }
+
+    return category.tabs.some(
+      (tab) =>
+        tab.to === currentLocation ||
+        tab.to.split("?")[0] === loc.pathname ||
+        tab.subtabs?.some(
+          (subtab) => subtab.to === currentLocation
+        )
+    );
+  }) || categories[0];
   useEffect(() => setMoreOpen(false), [loc.pathname, loc.search]);
   const linkCls = (isActive) => `flex items-center gap-3 px-4 h-11 rounded-xl text-sm font-medium transition-colors ${isActive ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`;
   const isBottomItemActive = (item) => {
